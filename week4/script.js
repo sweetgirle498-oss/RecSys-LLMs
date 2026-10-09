@@ -184,8 +184,19 @@ function asIndex(basketsOrIndex) {
  * @returns {number} count(A) for a single-element `stocks`, count(A union B) for two.
  */
 function countItemset(basketsOrIndex, stocks) {
-  // TODO(hw4): intersect the posting lists and return the number of baskets.
-  throw new Error("TODO(hw4): countItemset is not implemented yet.");
+  const requested = dedupeBasket(stocks);
+  if (requested.length === 0) return 0;
+
+  const index = asIndex(basketsOrIndex);
+  const postings = requested.map((stock) => index.byStock.get(stock));
+  if (postings.some((posting) => !posting)) return 0;
+
+  postings.sort((left, right) => left.size - right.size);
+  let count = 0;
+  for (const basketId of postings[0]) {
+    if (postings.every((posting) => posting.has(basketId))) count += 1;
+  }
+  return count;
 }
 
 /**
@@ -228,8 +239,16 @@ function countPair(basketsOrIndex, stockA, stockB) {
  * @returns {Array<string>} unique stock codes, in first-appearance order.
  */
 function dedupeBasket(rawItems) {
-  // TODO(hw4): return the unique stock codes in first-appearance order.
-  throw new Error("TODO(hw4): dedupeBasket is not implemented yet.");
+  const seen = new Set();
+  const unique = [];
+  for (const item of rawItems) {
+    const stock = stockOf(item);
+    if (!seen.has(stock)) {
+      seen.add(stock);
+      unique.push(stock);
+    }
+  }
+  return unique;
 }
 
 /**
@@ -246,8 +265,10 @@ function dedupeBasket(rawItems) {
  * @returns {{value: number, defined: boolean}} `defined` is false when `n === 0`.
  */
 function computeSupport(jointCount, n) {
-  // TODO(hw4): support = jointCount / n, undefined when n === 0.
-  throw new Error("TODO(hw4): computeSupport is not implemented yet.");
+  if (!Number.isFinite(jointCount) || !Number.isFinite(n) || n <= 0) {
+    return { value: 0, defined: false };
+  }
+  return { value: jointCount / n, defined: true };
 }
 
 /**
@@ -265,8 +286,14 @@ function computeSupport(jointCount, n) {
  * @returns {{value: number, defined: boolean}}
  */
 function computeConfidence(jointCount, antecedentCount) {
-  // TODO(hw4): confidence = jointCount / antecedentCount, undefined when count(A) === 0.
-  throw new Error("TODO(hw4): computeConfidence is not implemented yet.");
+  if (
+    !Number.isFinite(jointCount) ||
+    !Number.isFinite(antecedentCount) ||
+    antecedentCount <= 0
+  ) {
+    return { value: 0, defined: false };
+  }
+  return { value: jointCount / antecedentCount, defined: true };
 }
 
 /**
@@ -287,8 +314,21 @@ function computeConfidence(jointCount, antecedentCount) {
  * @returns {{value: number, defined: boolean}}
  */
 function computeLift(confidence, consequentCount, n) {
-  // TODO(hw4): lift = confidence / (consequentCount / n), guarded.
-  throw new Error("TODO(hw4): computeLift is not implemented yet.");
+  if (
+    !confidence ||
+    confidence.defined !== true ||
+    !Number.isFinite(confidence.value) ||
+    !Number.isFinite(consequentCount) ||
+    !Number.isFinite(n) ||
+    consequentCount <= 0 ||
+    n <= 0
+  ) {
+    return { value: 0, defined: false };
+  }
+  const value = confidence.value / (consequentCount / n);
+  return Number.isFinite(value)
+    ? { value, defined: true }
+    : { value: 0, defined: false };
 }
 
 /**
@@ -333,8 +373,65 @@ function validateThresholds(minSupport, minConfidence) {
  * @returns {Array<{items: string[], count: number, support: number}>} frequent itemsets
  */
 function findFrequentItemsets(transactions, minSupport) {
-  // TODO(hw4): implement Apriori (or an equivalent frequent-itemset miner).
-  throw new Error("TODO(hw4): findFrequentItemsets is not implemented yet.");
+  const n = transactions.length;
+  if (n === 0) return [];
+
+  const index = buildIndex(transactions);
+  const keyOf = (items) => JSON.stringify(items);
+  const result = [];
+  let level = [...index.byStock.entries()]
+    .map(([stock, posting]) => ({
+      items: [stock],
+      count: posting.size,
+      support: posting.size / n,
+    }))
+    .filter((itemset) => itemset.support >= minSupport)
+    .sort((left, right) => left.items[0].localeCompare(right.items[0]));
+
+  result.push(...level);
+  while (level.length > 0) {
+    const previousKeys = new Set(level.map((itemset) => keyOf(itemset.items)));
+    const candidates = new Map();
+    const prefixLength = level[0].items.length - 1;
+
+    for (let i = 0; i < level.length; i += 1) {
+      for (let j = i + 1; j < level.length; j += 1) {
+        const left = level[i].items;
+        const right = level[j].items;
+        if (
+          !left
+            .slice(0, prefixLength)
+            .every((item, position) => item === right[position])
+        ) {
+          continue;
+        }
+
+        const candidate = [...left, right[right.length - 1]];
+        const allSubsetsFrequent = candidate.every((_, omitted) =>
+          previousKeys.has(
+            keyOf(candidate.filter((__, position) => position !== omitted)),
+          ),
+        );
+        if (allSubsetsFrequent) candidates.set(keyOf(candidate), candidate);
+      }
+    }
+
+    const nextLevel = [];
+    for (const candidate of candidates.values()) {
+      const count = countItemset(index, candidate);
+      const support = count / n;
+      if (support >= minSupport) {
+        nextLevel.push({ items: candidate, count, support });
+      }
+    }
+    nextLevel.sort((left, right) =>
+      keyOf(left.items).localeCompare(keyOf(right.items)),
+    );
+    result.push(...nextLevel);
+    level = nextLevel;
+  }
+
+  return result;
 }
 
 /**
@@ -360,9 +457,50 @@ function findFrequentItemsets(transactions, minSupport) {
  * @returns {Rule[]}
  */
 function generateRules(frequentItemsets, minConfidence) {
-  // TODO(hw4): generate candidate rules from each frequent itemset, compute
-  // confidence in both directions, then keep the rules that pass the threshold.
-  throw new Error("TODO(hw4): generateRules is not implemented yet.");
+  const keyOf = (items) => JSON.stringify([...items].sort());
+  const itemsetByKey = new Map(
+    frequentItemsets.map((itemset) => [keyOf(itemset.items), itemset]),
+  );
+  const sample = frequentItemsets.find(
+    (itemset) => itemset.count > 0 && itemset.support > 0,
+  );
+  const n = sample ? sample.count / sample.support : 0;
+  const rules = [];
+
+  for (const itemset of frequentItemsets) {
+    const items = [...new Set(itemset.items)].sort();
+    if (items.length < 2) continue;
+
+    const subsetCount = 2 ** items.length;
+    for (let mask = 1; mask < subsetCount - 1; mask += 1) {
+      const antecedent = [];
+      const consequent = [];
+      items.forEach((item, position) => {
+        (mask & 2 ** position ? antecedent : consequent).push(item);
+      });
+
+      const antecedentSet = itemsetByKey.get(keyOf(antecedent));
+      const consequentSet = itemsetByKey.get(keyOf(consequent));
+      if (!antecedentSet || !consequentSet) continue;
+
+      const confidence = computeConfidence(itemset.count, antecedentSet.count);
+      if (!confidence.defined || confidence.value < minConfidence) continue;
+
+      const lift = computeLift(confidence, consequentSet.count, n);
+      rules.push({
+        antecedent,
+        consequent,
+        jointCount: itemset.count,
+        antecedentCount: antecedentSet.count,
+        consequentCount: consequentSet.count,
+        support: itemset.support,
+        confidence: confidence.value,
+        lift: lift.value,
+      });
+    }
+  }
+
+  return rules;
 }
 
 // ---------------------------------------------------------------------------
